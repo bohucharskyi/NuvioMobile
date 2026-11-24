@@ -1,0 +1,69 @@
+workflows:
+  ios-testflight:
+    name: Nuvio iOS (Internal TestFlight)
+    instance_type: mac_mini_m2
+    max_build_duration: 90
+    integrations:
+      app_store_connect: footybite_asc
+    environment:
+      xcode: "27.1"
+      java: 17
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.bohucharskyi.nuvio
+      vars:
+        XCODE_PROJECT: iosApp/iosApp.xcodeproj
+        XCODE_SCHEME: iosApp
+        APPLE_TEAM_ID: HNXK696QY2
+        BUNDLE_ID: com.bohucharskyi.nuvio
+        NUVIO_IOS_DISTRIBUTION: appstore
+        GRADLE_OPTS: -Dfile.encoding=UTF-8
+        KOTLIN_DAEMON_JVMARGS: -Xmx2048M
+        GRADLE_JVM_ARGS: -Xmx4608M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=768M
+        KOTLIN_NATIVE_JVM_ARGS: -Xmx4608M
+    cache:
+      cache_paths:
+        - ~/.gradle/caches
+        - ~/.gradle/wrapper
+        - ~/.konan
+    scripts:
+      - name: Prepare upstream iOS dependencies
+        script: |
+          set -euo pipefail
+          xcodebuild -version
+          java -version
+          ./scripts/prepare-ios-dependencies.sh
+      - name: Set bundle identifiers and TestFlight version
+        script: |
+          set -euo pipefail
+          project="$XCODE_PROJECT/project.pbxproj"
+          sed -i '' -E \
+            -e "s/DEVELOPMENT_TEAM = 8QBDZ766S3;/DEVELOPMENT_TEAM = $APPLE_TEAM_ID;/" \
+            -e "s/PRODUCT_BUNDLE_IDENTIFIER = com\.nuvio\.(app|media);/PRODUCT_BUNDLE_IDENTIFIER = $BUNDLE_ID;/" \
+            -e "s/PRODUCT_BUNDLE_IDENTIFIER = com\.nuvio\.(app|media)\.DownloadsWidgetExtension;/PRODUCT_BUNDLE_IDENTIFIER = $BUNDLE_ID.DownloadsWidgetExtension;/" \
+            "$project"
+
+          # Apple's marketing version accepts only numbers and periods.
+          version_file=iosApp/Configuration/Version.xcconfig
+          version=$(sed -nE 's/^MARKETING_VERSION[[:space:]]*=[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' "$version_file")
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          printf 'CURRENT_PROJECT_VERSION=%s\nMARKETING_VERSION=%s\n' \
+            "$PROJECT_BUILD_NUMBER" "$version" > "$version_file"
+      - name: Apply the app and widget signing profiles
+        script: |
+          set -euo pipefail
+          xcode-project use-profiles \
+            --project "$XCODE_PROJECT" \
+            --custom-export-options='{"testFlightInternalTestingOnly": true, "manageAppVersionAndBuildNumber": false}'
+      - name: Archive and export the signed iPhone build
+        script: |
+          set -euo pipefail
+          env "ORG_GRADLE_PROJECT_org.gradle.jvmargs=$GRADLE_JVM_ARGS" \
+            "ORG_GRADLE_PROJECT_kotlin.native.jvmArgs=$KOTLIN_NATIVE_JVM_ARGS" \
+            xcode-project build-ipa --project "$XCODE_PROJECT" --scheme "$XCODE_SCHEME" --config Release
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration

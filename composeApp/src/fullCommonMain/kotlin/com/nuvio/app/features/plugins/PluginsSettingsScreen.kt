@@ -48,6 +48,8 @@ import nuvio.composeapp.generated.resources.plugins_badge_enabled
 import nuvio.composeapp.generated.resources.plugins_badge_providers
 import nuvio.composeapp.generated.resources.plugins_badge_refreshing
 import nuvio.composeapp.generated.resources.plugins_badge_repos
+import nuvio.composeapp.generated.resources.plugins_bundled_empty
+import nuvio.composeapp.generated.resources.plugins_bundled_only
 import nuvio.composeapp.generated.resources.plugins_button_install_repo
 import nuvio.composeapp.generated.resources.plugins_button_installing
 import nuvio.composeapp.generated.resources.plugins_button_test_provider
@@ -196,53 +198,55 @@ fun PluginsSettingsPageContent(
             }
         }
 
-        NuvioSectionLabel(stringResource(Res.string.plugins_section_add_repo))
-        NuvioSurfaceCard {
-            NuvioInputField(
-                value = repositoryUrl,
-                onValueChange = {
-                    repositoryUrl = it
-                    message = null
-                },
-                placeholder = stringResource(Res.string.plugins_input_manifest_placeholder),
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            NuvioPrimaryButton(
-                text = if (isAdding) {
-                    stringResource(Res.string.plugins_button_installing)
-                } else {
-                    stringResource(Res.string.plugins_button_install_repo)
-                },
-                enabled = repositoryUrl.isNotBlank() && !isAdding,
-                onClick = {
-                    val requested = repositoryUrl.trim()
-                    if (requested.isBlank()) {
-                        message = enterRepoUrlError
-                        return@NuvioPrimaryButton
-                    }
-                    isAdding = true
-                    message = null
-                    coroutineScope.launch {
-                        when (val result = PluginRepository.addRepository(requested)) {
-                            is AddPluginRepositoryResult.Success -> {
-                                repositoryUrl = ""
-                                message = installedTemplate.replace("%1\$s", result.repository.name)
-                            }
-                            is AddPluginRepositoryResult.Error -> {
-                                message = result.message
-                            }
-                        }
-                        isAdding = false
-                    }
-                },
-            )
-            message?.let { text ->
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+        if (!bundledProvidersOnly) {
+            NuvioSectionLabel(stringResource(Res.string.plugins_section_add_repo))
+            NuvioSurfaceCard {
+                NuvioInputField(
+                    value = repositoryUrl,
+                    onValueChange = {
+                        repositoryUrl = it
+                        message = null
+                    },
+                    placeholder = stringResource(Res.string.plugins_input_manifest_placeholder),
                 )
+                Spacer(modifier = Modifier.height(16.dp))
+                NuvioPrimaryButton(
+                    text = if (isAdding) {
+                        stringResource(Res.string.plugins_button_installing)
+                    } else {
+                        stringResource(Res.string.plugins_button_install_repo)
+                    },
+                    enabled = repositoryUrl.isNotBlank() && !isAdding,
+                    onClick = {
+                        val requested = repositoryUrl.trim()
+                        if (requested.isBlank()) {
+                            message = enterRepoUrlError
+                            return@NuvioPrimaryButton
+                        }
+                        isAdding = true
+                        message = null
+                        coroutineScope.launch {
+                            when (val result = PluginRepository.addRepository(requested)) {
+                                is AddPluginRepositoryResult.Success -> {
+                                    repositoryUrl = ""
+                                    message = installedTemplate.replace("%1\$s", result.repository.name)
+                                }
+                                is AddPluginRepositoryResult.Error -> {
+                                    message = result.message
+                                }
+                            }
+                            isAdding = false
+                        }
+                    },
+                )
+                message?.let { text ->
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 
@@ -256,7 +260,9 @@ fun PluginsSettingsPageContent(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = stringResource(Res.string.plugins_empty_repos_subtitle),
+                    text = stringResource(
+                        if (bundledProvidersOnly) Res.string.plugins_bundled_empty else Res.string.plugins_empty_repos_subtitle,
+                    ),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -287,14 +293,18 @@ fun PluginsSettingsPageContent(
                             }
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = repo.manifestUrl,
+                                text = if (bundledProvidersOnly) {
+                                    stringResource(Res.string.plugins_bundled_only)
+                                } else {
+                                    repo.manifestUrl
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (!bundledProvidersOnly) Row(verticalAlignment = Alignment.CenterVertically) {
                             NuvioIconActionButton(
                                 icon = Icons.Rounded.Refresh,
                                 contentDescription = stringResource(Res.string.plugins_cd_refresh_repo),
@@ -335,7 +345,9 @@ fun PluginsSettingsPageContent(
         if (sortedScrapers.isEmpty()) {
             NuvioSurfaceCard {
                 Text(
-                    text = stringResource(Res.string.plugins_empty_providers),
+                    text = stringResource(
+                        if (bundledProvidersOnly) Res.string.plugins_bundled_empty else Res.string.plugins_empty_providers,
+                    ),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

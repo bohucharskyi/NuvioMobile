@@ -1,6 +1,7 @@
 package com.nuvio.app.features.plugins
 
 import co.touchlab.kermit.Logger
+import com.nuvio.app.core.build.AppVersionConfig
 import com.nuvio.app.core.network.SupabaseProvider
 import com.nuvio.app.features.addons.httpGetText
 import com.nuvio.app.features.profiles.ProfileRepository
@@ -31,6 +32,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
 import nuvio.composeapp.generated.resources.Res
+import nuvio.composeapp.generated.resources.plugins_bundled_only
 import nuvio.composeapp.generated.resources.plugins_error_enter_repo_url
 import nuvio.composeapp.generated.resources.plugins_error_enter_valid_url
 import nuvio.composeapp.generated.resources.plugins_error_provider_not_found
@@ -38,6 +40,14 @@ import nuvio.composeapp.generated.resources.plugins_repository_already_installed
 import nuvio.composeapp.generated.resources.plugins_repository_install_failed
 import nuvio.composeapp.generated.resources.plugins_repository_refresh_failed
 import org.jetbrains.compose.resources.getString
+
+internal val bundledProvidersOnly = AppVersionConfig.IOS_BUNDLED_PLUGINS_ONLY && currentPluginPlatform() == "ios"
+
+@Serializable
+private data class BundledProviders(
+    val manifest: PluginManifest,
+    val scripts: Map<String, String>,
+)
 
 @Serializable
 private data class PluginRow(
@@ -71,6 +81,13 @@ actual object PluginRepository {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val log = Logger.withTag("PluginRepository")
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val bundledProviders by lazy {
+        runCatching {
+            PluginStorage.loadBundledProviders()?.let { json.decodeFromString<BundledProviders>(it) }
+        }.onFailure { error ->
+            log.e(error) { "Failed to read bundled providers" }
+        }.getOrNull()
+    }
 
     private val _uiState = MutableStateFlow(PluginsUiState())
     actual val uiState: StateFlow<PluginsUiState> = _uiState.asStateFlow()
@@ -87,7 +104,7 @@ actual object PluginRepository {
         val effectiveProfileId = resolveEffectiveProfileId(ProfileRepository.activeProfileId)
         val shouldRefreshStoredRepos = !initialized || currentProfileId != effectiveProfileId
         ensureStateLoadedForProfile(effectiveProfileId)
-        if (!shouldRefreshStoredRepos) return
+        if (bundledProvidersOnly || !shouldRefreshStoredRepos) return
 
         val state = _uiState.value
         val nowEpochMs = currentEpochMillis()
@@ -117,6 +134,7 @@ actual object PluginRepository {
     }
 
     actual suspend fun pullFromServer(profileId: Int) {
+        if (bundledProvidersOnly) return
         val effectiveProfileId = resolveEffectiveProfileId(profileId)
         ensureStateLoadedForProfile(effectiveProfileId)
         runCatching {
@@ -175,6 +193,9 @@ actual object PluginRepository {
     }
 
     actual suspend fun addRepository(rawUrl: String): AddPluginRepositoryResult {
+        if (bundledProvidersOnly) {
+            return AddPluginRepositoryResult.Error(getString(Res.string.plugins_bundled_only))
+        }
         initialize()
         val manifestUrl = try {
             normalizeManifestUrl(rawUrl)
@@ -207,6 +228,7 @@ actual object PluginRepository {
     }
 
     actual fun removeRepository(manifestUrl: String) {
+        if (bundledProvidersOnly) return
         initialize()
         _uiState.update { state ->
             state.copy(
@@ -234,6 +256,7 @@ actual object PluginRepository {
         pushAfterRefresh: Boolean,
         ensureInitialized: Boolean,
     ) {
+        if (bundledProvidersOnly) return
         if (ensureInitialized) {
             initialize()
         }
@@ -371,6 +394,13 @@ actual object PluginRepository {
         episode: Int?,
         respectSearchPause: Boolean,
     ): Result<List<PluginRuntimeResult>> {
+        val activeScraper = if (bundledProvidersOnly) {
+            initialize()
+            _uiState.value.scrapers.find { it.id == scraper.id && it.enabled }
+                ?: return Result.failure(IllegalArgumentException(getString(Res.string.plugins_error_provider_not_found)))
+        } else {
+            scraper
+        }
         val resolvedTmdbId = resolvePluginTmdbId(
             tmdbId = tmdbId,
             mediaType = mediaType,
@@ -378,12 +408,12 @@ actual object PluginRepository {
 
         return runCatching {
             PluginRuntime.executePlugin(
-                code = scraper.code,
+                code = activeScraper.code,
                 tmdbId = resolvedTmdbId,
-                mediaType = jsPluginMediaType(normalizePluginType(mediaType), scraper.supportedTypes, season, episode),
+                mediaType = jsPluginMediaType(normalizePluginType(mediaType), activeScraper.supportedTypes, season, episode),
                 season = season,
                 episode = episode,
-                scraperId = scraper.id,
+                scraperId = activeScraper.id,
                 respectSearchPause = respectSearchPause,
             )
         }
@@ -406,6 +436,7 @@ actual object PluginRepository {
         manifestUrl: String,
         previousScrapers: Map<String, PluginScraper>,
     ): Pair<PluginRepositoryItem, List<PluginScraper>> {
+        check(!bundledProvidersOnly)
         val storageProfileId = currentProfileId
         return withContext(Dispatchers.Default) {
             val payload = httpGetText(manifestUrl)
@@ -432,29 +463,7 @@ actual object PluginRepository {
                         if (!cached) {
                             log.w { "Failed to cache plugin scraper $scraperId" }
                         }
-                        val previous = previousScrapers[scraperId]
-                        val enabled = when {
-                            !info.enabled -> false
-                            previous != null -> previous.enabled
-                            else -> info.enabled
-                        }
-
-                        PluginScraper(
-                            id = scraperId,
-                            repositoryUrl = manifestUrl,
-                            name = info.name,
-                            description = info.description.orEmpty(),
-                            version = info.version,
-                            filename = info.filename,
-                            supportedTypes = info.supportedTypes,
-                            enabled = enabled,
-                            manifestEnabled = info.enabled,
-                            hasSettings = info.hasSettings,
-                            logo = info.logo,
-                            contentLanguage = info.contentLanguage ?: emptyList(),
-                            formats = info.formats ?: info.supportedFormats,
-                            code = code,
-                        )
+                        info.toScraper(manifestUrl, scraperId, code, previousScrapers[scraperId]?.enabled)
                     }.getOrNull()
                 }
 
@@ -471,6 +480,28 @@ actual object PluginRepository {
             repo to scrapers
         }
     }
+
+    private fun PluginManifestScraper.toScraper(
+        repositoryUrl: String,
+        scraperId: String,
+        code: String,
+        wasEnabled: Boolean?,
+    ) = PluginScraper(
+        id = scraperId,
+        repositoryUrl = repositoryUrl,
+        name = name,
+        description = description.orEmpty(),
+        version = version,
+        filename = filename,
+        supportedTypes = supportedTypes,
+        enabled = enabled && (wasEnabled ?: true),
+        manifestEnabled = enabled,
+        hasSettings = hasSettings,
+        logo = logo,
+        contentLanguage = contentLanguage.orEmpty(),
+        formats = formats ?: supportedFormats,
+        code = code,
+    )
 
     private fun PluginManifestScraper.isSupportedOnCurrentPlatform(): Boolean {
         val platform = currentPluginPlatform().lowercase()
@@ -532,7 +563,7 @@ actual object PluginRepository {
             revision = persistenceRevision.incrementAndGet(),
             state = _uiState.value,
         )
-        val requiresCodeWrite = snapshot.state.scrapers.any { scraper ->
+        val requiresCodeWrite = !bundledProvidersOnly && snapshot.state.scrapers.any { scraper ->
             !PluginStorage.hasScraperCode(snapshot.profileId, scraper.id)
         }
         if (requiresCodeWrite) {
@@ -545,7 +576,8 @@ actual object PluginRepository {
     private fun persist(snapshot: PluginPersistenceSnapshot) {
         if (snapshot.generation != persistenceGeneration.value) return
         var cached = true
-        snapshot.state.scrapers.forEach { scraper ->
+        val scrapersToCache = if (bundledProvidersOnly) emptyList() else snapshot.state.scrapers
+        scrapersToCache.forEach { scraper ->
             val scraperCached = PluginStorage.saveScraperCode(
                 profileId = snapshot.profileId,
                 scraperId = scraper.id,
@@ -600,6 +632,7 @@ actual object PluginRepository {
 
     private fun loadStateAsUiState(profileId: Int): LoadedPluginState {
         val stored = loadStoredState(profileId)
+        if (bundledProvidersOnly) return LoadedPluginState(loadBundledState(stored), requiresMigration = false)
         var requiresMigration = false
         val scrapers = stored?.scrapers
             ?.mapNotNull { storedScraper ->
@@ -632,6 +665,31 @@ actual object PluginRepository {
             ),
             requiresMigration = requiresMigration,
         )
+    }
+
+    private fun loadBundledState(stored: StoredPluginsState?): PluginsUiState {
+        val state = PluginsUiState(
+            pluginsEnabled = stored?.pluginsEnabled ?: true,
+            groupStreamsByRepository = stored?.groupStreamsByRepository ?: false,
+        )
+        val bundled = bundledProviders ?: return state
+        val repositoryId = "bundle://providers/manifest.json"
+        val enabledPreferences = stored?.scrapers.orEmpty().associate { it.id to it.enabled }
+        val scrapers = bundled.manifest.scrapers
+            .filter { it.isSupportedOnCurrentPlatform() }
+            .mapNotNull { provider ->
+                val scraperId = "$repositoryId:${provider.id}"
+                val code = bundled.scripts[provider.filename]?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                provider.toScraper(repositoryId, scraperId, code, enabledPreferences[scraperId])
+            }
+        val repository = PluginRepositoryItem(
+            manifestUrl = repositoryId,
+            name = bundled.manifest.name,
+            description = bundled.manifest.description,
+            version = bundled.manifest.version,
+            scraperCount = scrapers.size,
+        )
+        return state.copy(repositories = listOf(repository), scrapers = scrapers)
     }
 
     private fun dedupeManifestUrls(urls: List<String>): List<String> =

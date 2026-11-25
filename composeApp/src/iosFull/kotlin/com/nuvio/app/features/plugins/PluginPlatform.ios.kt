@@ -2,12 +2,14 @@
 
 package com.nuvio.app.features.plugins
 
+import com.nuvio.app.core.build.AppVersionConfig
 import kotlinx.atomicfu.locks.SynchronizedObject
 import kotlinx.atomicfu.locks.synchronized
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.convert
 import kotlinx.cinterop.usePinned
+import platform.Foundation.NSBundle
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSHomeDirectory
 import platform.Foundation.NSUserDefaults
@@ -22,12 +24,19 @@ import platform.posix.fwrite
 import platform.posix.rewind
 
 internal object PluginStorage {
-    private const val pluginsStateKey = "plugins_state"
+    private val pluginsStateKey = if (AppVersionConfig.IOS_BUNDLED_PLUGINS_ONLY) {
+        "bundled_plugins_state"
+    } else {
+        "plugins_state"
+    }
     private const val scraperCodeDirectoryName = "nuvio_plugin_scrapers"
     private val scraperCodeLock = SynchronizedObject()
 
     fun loadState(profileId: Int): String? =
         NSUserDefaults.standardUserDefaults.stringForKey("${pluginsStateKey}_$profileId")
+
+    fun loadBundledProviders(): String? =
+        NSBundle.mainBundle.pathForResource("NuvioBundledProviders", "json")?.let(::readUtf8File)
 
     fun saveState(profileId: Int, payload: String) {
         NSUserDefaults.standardUserDefaults.setObject(

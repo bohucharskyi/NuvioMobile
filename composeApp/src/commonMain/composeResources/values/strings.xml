@@ -2344,6 +2344,8 @@
     <string name="plugins_repository_install_failed">Unable to install plugin repository</string>
     <string name="plugins_repository_refresh_failed">Unable to refresh repository</string>
     <string name="plugins_section_add_repo">ADD REPOSITORY</string>
+    <string name="plugins_bundled_only">This build uses providers bundled with the app.</string>
+    <string name="plugins_bundled_empty">This build contains no bundled providers.</string>
     <string name="plugins_section_installed_repos">INSTALLED REPOSITORIES</string>
     <string name="plugins_section_overview">OVERVIEW</string>
     <string name="plugins_section_providers">PROVIDERS</string>

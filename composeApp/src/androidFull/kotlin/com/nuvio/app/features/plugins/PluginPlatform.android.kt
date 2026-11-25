@@ -19,6 +19,8 @@ internal object PluginStorage {
     fun loadState(profileId: Int): String? =
         preferences?.getString("${pluginsStateKey}_$profileId", null)
 
+    fun loadBundledProviders(): String? = null
+
     fun saveState(profileId: Int, payload: String) {
         preferences
             ?.edit()

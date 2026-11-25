@@ -1,6 +1,6 @@
 workflows:
   ios-testflight:
-    name: Nuvio iOS (Internal TestFlight)
+    name: Nuvio iOS Full (Internal TestFlight)
     instance_type: mac_mini_m2
     max_build_duration: 90
     integrations:
@@ -17,7 +17,7 @@ workflows:
         APPLE_TEAM_ID: HNXK696QY2
         BUNDLE_ID: com.bohucharskyi.nuvio
         CM_RECURSIVE_SUBMODULE_INIT: "false"
-        NUVIO_IOS_DISTRIBUTION: appstore
+        NUVIO_IOS_DISTRIBUTION: testflight
         GRADLE_OPTS: -Dfile.encoding=UTF-8
     cache:
       cache_paths:
@@ -34,6 +34,7 @@ workflows:
           # Gradle validates the local.properties input even without service keys.
           touch local.properties
           ./scripts/prepare-ios-dependencies.sh
+          python3 scripts/bundle-ios-testflight-providers.py
       - name: Configure Xcode for TestFlight
         script: |
           set -euo pipefail

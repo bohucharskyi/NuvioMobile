@@ -29,6 +29,9 @@ abstract class GenerateRuntimeConfigsTask : DefaultTask() {
     abstract val appVersionCode: Property<Int>
 
     @get:Input
+    abstract val iosBundledPluginsOnly: Property<Boolean>
+
+    @get:Input
     abstract val supabaseUrl: Property<String>
 
     @get:Input
@@ -186,6 +189,7 @@ abstract class GenerateRuntimeConfigsTask : DefaultTask() {
                 |object AppVersionConfig {
                 |    const val VERSION_NAME = "${appVersionName.get()}"
                 |    const val VERSION_CODE = ${appVersionCode.get()}
+                |    const val IOS_BUNDLED_PLUGINS_ONLY = ${iosBundledPluginsOnly.get()}
                 |}
                 """.trimMargin()
             )
@@ -248,10 +252,11 @@ val iosDistribution = (
         ?: supabaseProps.getProperty("NUVIO_IOS_DISTRIBUTION")
         ?: "appstore"
     ).trim().lowercase()
-require(iosDistribution == "appstore" || iosDistribution == "full") {
-    "NUVIO_IOS_DISTRIBUTION must be 'appstore' or 'full'."
+require(iosDistribution in setOf("appstore", "full", "testflight")) {
+    "NUVIO_IOS_DISTRIBUTION must be 'appstore', 'full', or 'testflight'."
 }
-val iosDistributionSourceDir = if (iosDistribution == "full") {
+val iosFullFeatures = iosDistribution != "appstore"
+val iosDistributionSourceDir = if (iosFullFeatures) {
     "src/iosFull/kotlin"
 } else {
     "src/iosAppStore/kotlin"
@@ -320,6 +325,7 @@ val generateRuntimeConfigs = tasks.register<GenerateRuntimeConfigsTask>("generat
     localPropertiesFile.set(rootProject.layout.projectDirectory.file("local.properties"))
     appVersionName.set(releaseAppVersionName)
     appVersionCode.set(releaseAppVersionCode)
+    iosBundledPluginsOnly.set(iosDistribution == "testflight")
     supabaseUrl.set(runtimeConfigValue("NUVIO_SUPABASE_URL"))
     supabaseAnonKey.set(runtimeConfigValue("NUVIO_SUPABASE_ANON_KEY"))
     supabaseFallbackUrl.set(runtimeConfigValue("NUVIO_SUPABASE_FALLBACK_URL"))
@@ -377,7 +383,7 @@ kotlin {
                     defFile(project.file("src/nativeInterop/cinterop/appicon.def"))
                     compilerOpts("-I${project.projectDir}/src/nativeInterop/cinterop")
                 }
-                if (iosDistribution == "full") {
+                if (iosFullFeatures) {
                     check(nuvioEngineSliceDirectory.resolve("libCNuvioEngine.a").isFile) {
                         "Build the local Nuvio Engine Apple XCFramework before compiling iOS Full."
                     }
@@ -392,13 +398,13 @@ kotlin {
                 }
             }
 
-            if (iosDistribution == "full") {
+            if (iosFullFeatures) {
                 defaultSourceSet.kotlin.srcDir(fullCommonSourceDir)
             }
             defaultSourceSet.kotlin.srcDir(project.file(iosDistributionSourceDir))
             defaultSourceSet.dependencies {
                 implementation(libs.ktor.client.darwin)
-                if (iosDistribution == "full") {
+                if (iosFullFeatures) {
                     implementation(libs.quickjs.kt)
                     implementation(libs.ksoup)
                 }
@@ -409,7 +415,7 @@ kotlin {
             baseName = "ComposeApp"
             isStatic = true
             freeCompilerArgs += listOf("-Xbinary=bundleId=$iosFrameworkBundleId")
-            if (iosDistribution == "full") {
+            if (iosFullFeatures) {
                 linkerOpts(
                     "-lc++",
                     "-framework", "Security",

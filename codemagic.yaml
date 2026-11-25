@@ -19,9 +19,6 @@ workflows:
         CM_RECURSIVE_SUBMODULE_INIT: "false"
         NUVIO_IOS_DISTRIBUTION: appstore
         GRADLE_OPTS: -Dfile.encoding=UTF-8
-        KOTLIN_DAEMON_JVMARGS: -Xmx2048M
-        GRADLE_JVM_ARGS: -Xmx4608M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=768M
-        KOTLIN_NATIVE_JVM_ARGS: -Xmx4608M
     cache:
       cache_paths:
         - ~/.gradle/caches
@@ -33,8 +30,16 @@ workflows:
           set -euo pipefail
           xcodebuild -version
           java -version
+          sysctl -n hw.memsize
           # Gradle validates the local.properties input even without service keys.
           touch local.properties
+          # Kotlin/Native uses the Gradle JVM for release compilation.
+          sed -i '' -E \
+            -e 's/^org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx8192M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=768M/' \
+            -e 's/^kotlin\.daemon\.jvmargs=.*/kotlin.daemon.jvmargs=-Xmx1536M/' \
+            -e 's/^kotlin\.native\.jvmArgs=.*/kotlin.native.jvmArgs=-Xmx8192M/' \
+            gradle.properties
+          printf '\norg.gradle.workers.max=2\n' >> gradle.properties
           ./scripts/prepare-ios-dependencies.sh
       - name: Set bundle identifiers and TestFlight version
         script: |
@@ -61,9 +66,8 @@ workflows:
       - name: Archive and export the signed iPhone build
         script: |
           set -euo pipefail
-          env "ORG_GRADLE_PROJECT_org.gradle.jvmargs=$GRADLE_JVM_ARGS" \
-            "ORG_GRADLE_PROJECT_kotlin.native.jvmArgs=$KOTLIN_NATIVE_JVM_ARGS" \
-            xcode-project build-ipa --project "$XCODE_PROJECT" --scheme "$XCODE_SCHEME" --config Release
+          xcode-project build-ipa --project "$XCODE_PROJECT" --scheme "$XCODE_SCHEME" \
+            --config Release --disable-xcpretty
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log

@@ -33,15 +33,8 @@ workflows:
           sysctl -n hw.memsize
           # Gradle validates the local.properties input even without service keys.
           touch local.properties
-          # Kotlin/Native uses the Gradle JVM for release compilation.
-          sed -i '' -E \
-            -e 's/^org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx8192M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=768M/' \
-            -e 's/^kotlin\.daemon\.jvmargs=.*/kotlin.daemon.jvmargs=-Xmx1536M/' \
-            -e 's/^kotlin\.native\.jvmArgs=.*/kotlin.native.jvmArgs=-Xmx8192M/' \
-            gradle.properties
-          printf '\norg.gradle.workers.max=2\n' >> gradle.properties
           ./scripts/prepare-ios-dependencies.sh
-      - name: Set bundle identifiers and TestFlight version
+      - name: Configure Xcode for TestFlight
         script: |
           set -euo pipefail
           project="$XCODE_PROJECT/project.pbxproj"
@@ -50,6 +43,20 @@ workflows:
             -e "s/PRODUCT_BUNDLE_IDENTIFIER = com\.nuvio\.(app|media);/PRODUCT_BUNDLE_IDENTIFIER = $BUNDLE_ID;/" \
             -e "s/PRODUCT_BUNDLE_IDENTIFIER = com\.nuvio\.(app|media)\.DownloadsWidgetExtension;/PRODUCT_BUNDLE_IDENTIFIER = $BUNDLE_ID.DownloadsWidgetExtension;/" \
             "$project"
+
+          # Command-line settings override Codemagic's runner-level Gradle defaults.
+          gradle_task=':composeApp:embedAndSignAppleFrameworkForXcode'
+          grep -Fq "./gradlew $gradle_task" "$project"
+          sed -i '' "s|\./gradlew $gradle_task|./gradlew -Dorg.gradle.jvmargs=-Xmx8192M -Pkotlin.native.jvmArgs=-Xmx8192M -Pkotlin.daemon.jvmargs=-Xmx1536M --max-workers=2 -I .codemagic-heap.gradle $gradle_task|" "$project"
+          cat > .codemagic-heap.gradle <<'GRADLE'
+          gradle.settingsEvaluated {
+              def heapMiB = Runtime.getRuntime().maxMemory().intdiv(1024 * 1024)
+              println("Gradle JVM maximum heap: ${heapMiB} MiB")
+              if (heapMiB < 7680) {
+                  throw new GradleException("Kotlin/Native requires the configured 8 GiB Gradle heap.")
+              }
+          }
+          GRADLE
 
           # Apple's marketing version accepts only numbers and periods.
           version_file=iosApp/Configuration/Version.xcconfig
